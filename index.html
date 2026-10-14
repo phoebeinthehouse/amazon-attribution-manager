@@ -22,6 +22,10 @@
     <div class="field search"><label>Search</label><input id="search" placeholder="소재명, 제품, 담당자 검색"></div>
     <button class="btn" onclick="applyFilters()">적용</button><button class="btn" onclick="downloadCSV()">CSV 다운로드</button>
   </section>
+  <section class="coverage" aria-label="US 대시보드 합계 및 연결 안내">
+    <strong>US 대시보드 · 원본 합계 및 연결 안내</strong>
+    <iframe id="dashboardSummary" title="선택 기간의 전체 광고비·매출·추정 ROAS 및 연결 확인 안내" style="display:block;width:100%;height:210px;border:0;margin-top:8px;" loading="eager"></iframe>
+  </section>
   <section class="kpis">
     <div class="kpi"><div class="kl">Meta 광고</div><div class="kv" id="kMeta">—</div><div class="kh">유효한 광고 키</div></div>
     <div class="kpi good"><div class="kl">매칭 완료</div><div class="kv" id="kMatch">—</div><div class="kh">양쪽 데이터 존재</div></div>
@@ -53,7 +57,7 @@ function parseRows(text,type){return objects(text).map(r=>{const keys=Object.key
 function cacheGet(k){try{const x=JSON.parse(localStorage.getItem(k));return x&&Date.now()-x.t<CACHE_TTL?x.v:null}catch{return null}}
 function cacheSet(k,v){try{localStorage.setItem(k,JSON.stringify({t:Date.now(),v}))}catch{}}
 async function fetchText(url,key){const c=cacheGet(key);if(c)return c;const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),45000);try{const r=await fetch(url,{redirect:'follow',signal:ctl.signal});if(!r.ok)throw new Error('HTTP '+r.status);const t=await r.text();cacheSet(key,t);return t}finally{clearTimeout(timer)}}
-async function load(){try{const [m,a]=await Promise.all([fetchText(META_URL,'attr_meta_v1'),fetchText(AMZ_URL,'attr_amz_v1')]);RAW.meta=parseRows(m,'meta');RAW.amz=parseRows(a,'amz');const dates=[...RAW.meta,...RAW.amz].map(x=>x.date).filter(Boolean).sort();if(!dates.length)throw new Error('읽을 수 있는 날짜 데이터가 없습니다.');const last=dates.at(-1),first14=new Date(last+'T00:00:00Z');first14.setUTCDate(first14.getUTCDate()-13);$('from').min=dates[0];$('from').max=last;$('to').min=dates[0];$('to').max=last;$('from').value=first14.toISOString().slice(0,10)<dates[0]?dates[0]:first14.toISOString().slice(0,10);$('to').value=last;['from','to','status','search'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',applyFilters));$('state').textContent='Meta '+fmt(RAW.meta.length)+'행 · Amazon '+fmt(RAW.amz.length)+'행 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})+' 로드';applyFilters()}catch(e){$('state').textContent='로드 실패';$('error').style.display='block';$('error').textContent='데이터를 불러오지 못했습니다: '+e.message+' · Apps Script 배포 권한과 시트 이름을 확인하세요.';}}
+async function load(){try{const [m,a]=await Promise.all([fetchText(META_URL,'attr_meta_v1'),fetchText(AMZ_URL,'attr_amz_v1')]);RAW.meta=parseRows(m,'meta');RAW.amz=parseRows(a,'amz');const dates=[...RAW.meta,...RAW.amz].map(x=>x.date).filter(Boolean).sort();if(!dates.length)throw new Error('읽을 수 있는 날짜 데이터가 없습니다.');const last=dates.at(-1);$('from').min=dates[0];$('from').max=last;$('to').min=dates[0];$('to').max=last;const params=new URLSearchParams(location.search),pf=params.get('from'),pt=params.get('to');$('from').value=date(pf)||last.slice(0,7)+'-01';$('to').value=date(pt)||last;['from','to','status','search'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',applyFilters));$('state').textContent='Meta '+fmt(RAW.meta.length)+'행 · Amazon '+fmt(RAW.amz.length)+'행 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})+' 로드';applyFilters()}catch(e){$('state').textContent='로드 실패';$('error').style.display='block';$('error').textContent='데이터를 불러오지 못했습니다: '+e.message+' · Apps Script 배포 권한과 시트 이름을 확인하세요.';}}
 function aggregate(rows,type){const m=new Map();for(const r of rows){const valid=r.ad_name&&r.person&&r.product,key=valid?getKey(r):'INVALID|||'+r.raw;let x=m.get(key);if(!x){x={key,raw:new Set(),ad_name:r.ad_name,person:r.person,product:r.product,media:r.media,spend:0,clicks:0,impressions:0,purchases:0,revenue:0,valid};m.set(key,x)}x.raw.add(r.raw);for(const f of type==='meta'?['spend','clicks','impressions']:['purchases','revenue'])x[f]+=r[f]||0;}return m;}
 function reconcile(from,to){
   const meta=RAW.meta.filter(x=>x.date>=from&&x.date<=to);
@@ -71,13 +75,25 @@ function reconcile(from,to){
   const rank={invalid_amz:0,invalid_meta:1,meta_only:2,amazon_only:3,matched:4};
   return out.sort((a,b)=>rank[a.status]-rank[b.status]||((b.spend||b.revenue)-(a.spend||a.revenue)));
 }
-function applyFilters(){const from=$('from').value,to=$('to').value;if(!from||!to)return;const all=reconcile(from,to),st=$('status').value,q=$('search').value.trim().toLowerCase();VIEW=all.filter(x=>(st==='all'||x.status===st)&&(!q||[...x.raw,x.ad_name,x.product,x.person].join(' ').toLowerCase().includes(q)));const validMeta=all.filter(x=>['matched','meta_only'].includes(x.status)),matched=all.filter(x=>x.status==='matched').length,metaOnly=all.filter(x=>x.status==='meta_only').length,invalid=all.filter(x=>x.status.startsWith('invalid')).length,amzOnly=all.filter(x=>x.status==='amazon_only').length,pct=validMeta.length?matched/validMeta.length*100:0;$('kMeta').textContent=fmt(validMeta.length);$('kMatch').textContent=fmt(matched);$('kMetaOnly').textContent=fmt(metaOnly);$('kInvalid').textContent=fmt(invalid);$('kAmzOnly').textContent=fmt(amzOnly);$('coverageText').textContent=pct.toFixed(1)+'%';$('coverageBar').style.width=pct+'%';$('count').textContent=fmt(VIEW.length)+'개 표시';render();}
+function updateDashboardSummary(from,to){
+  const frame=$('dashboardSummary');
+  const url='https://phoebeinthehouse.github.io/meta-ads-dashboard/?view=qa&from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to);
+  if(frame.getAttribute('src')!==url)frame.src=url;
+}
+window.addEventListener('message',event=>{
+  const frame=$('dashboardSummary');
+  if(event.origin!==location.origin||event.source!==frame.contentWindow||event.data?.type!=='dashboard-qa-height')return;
+  const height=Number(event.data.height);
+  if(Number.isFinite(height))frame.style.height=Math.max(80,Math.min(1500,height+16))+'px';
+});
+function applyFilters(){const from=$('from').value,to=$('to').value;if(!from||!to||from>to)return;updateDashboardSummary(from,to);const all=reconcile(from,to),st=$('status').value,q=$('search').value.trim().toLowerCase();VIEW=all.filter(x=>(st==='all'||x.status===st)&&(!q||[...x.raw,x.ad_name,x.product,x.person].join(' ').toLowerCase().includes(q)));const validMeta=all.filter(x=>['matched','meta_only'].includes(x.status)),matched=all.filter(x=>x.status==='matched').length,metaOnly=all.filter(x=>x.status==='meta_only').length,invalid=all.filter(x=>x.status.startsWith('invalid')).length,amzOnly=all.filter(x=>x.status==='amazon_only').length,pct=validMeta.length?matched/validMeta.length*100:0;$('kMeta').textContent=fmt(validMeta.length);$('kMatch').textContent=fmt(matched);$('kMetaOnly').textContent=fmt(metaOnly);$('kInvalid').textContent=fmt(invalid);$('kAmzOnly').textContent=fmt(amzOnly);$('coverageText').textContent=pct.toFixed(1)+'%';$('coverageBar').style.width=pct+'%';$('count').textContent=fmt(VIEW.length)+'개 표시';render();}
 const LABEL={matched:['매칭 완료','p-match'],meta_only:['Amazon 미확인','p-meta'],amazon_only:['Amazon만 존재','p-amz'],invalid_meta:['Meta 이름 오류','p-invalid'],invalid_amz:['Amazon 이름 오류','p-invalid']};
 function render(){const body=$('tbody');if(!VIEW.length){body.innerHTML='<tr><td colspan="10" class="empty">조건에 맞는 항목이 없습니다.</td></tr>';return}body.innerHTML=VIEW.map(x=>{const l=LABEL[x.status],raw=[...x.raw].join(' | ');return'<tr><td><span class="pill '+l[1]+'">'+l[0]+'</span></td><td class="raw">'+esc(raw)+'</td><td class="parsed">'+esc(x.ad_name||'—')+'</td><td>'+esc(x.product||'—')+'</td><td>'+esc(x.person||'—')+'</td><td class="num">'+(x.spend?'₩'+fmt(x.spend):'—')+'</td><td class="num">'+(x.clicks?fmt(x.clicks):'—')+'</td><td class="num">'+(x.purchases?fmt(x.purchases):'—')+'</td><td class="num">'+(x.revenue?'₩'+fmt(x.revenue):'—')+'</td><td class="raw muted">'+esc(x.note)+'</td></tr>'}).join('');}
 function csvCell(v){return'"'+String(v??'').replace(/"/g,'""')+'"'}
 function downloadCSV(){const head=['상태','원본 광고명','파싱 소재명','제품','담당자','Meta 광고비','Meta 클릭','Amazon 구매','Amazon 매출','확인사항'],rows=VIEW.map(x=>[LABEL[x.status][0],[...x.raw].join(' | '),x.ad_name,x.product,x.person,x.spend,x.clicks,x.purchases,x.revenue,x.note]);const blob=new Blob(['\ufeff'+[head,...rows].map(r=>r.map(csvCell).join(',')).join('\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='amazon-attribution-qa_'+$('from').value+'_'+$('to').value+'.csv';a.click();URL.revokeObjectURL(a.href);}
-function reloadFresh(){['attr_meta_v1','attr_amz_v1'].forEach(k=>localStorage.removeItem(k));location.reload();}
+function reloadFresh(){['attr_meta_v1','attr_amz_v1','meta_raw','amz_raw','ads_list'].forEach(k=>localStorage.removeItem(k));location.reload();}
 load();
 </script>
 </body>
 </html>
+
